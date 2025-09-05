@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TMS — Unit</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script type="module">
+    import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let myVehicleId = null;
+
+    async function requireUnit() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return location.href='index.html';
+      const { data: me } = await supabase.from('profiles').select('role, full_name, vehicle_id').eq('id', user.id).maybeSingle();
+      if (me?.role !== 'unit') return location.href='index.html';
+      document.getElementById('who').innerText = me.full_name || 'Unit';
+      // cari vehicle by profiles.vehicle_id atau vehicles.user_id
+      if (me.vehicle_id) myVehicleId = me.vehicle_id;
+      else {
+        const { data: v } = await supabase.from('vehicles').select('id').eq('user_id', user.id).maybeSingle();
+        myVehicleId = v?.id || null;
+      }
+    }
+
+    function statusButtons(o) {
+      const s = o.status;
+      const id = o.id;
+      const btn = (label, next) => \`<button class="btn small" data-next="\${next}" data-id="\${id}">\${label}</button>\`;
+      switch(s){
+        case 'assignment': return btn('Accepted','accepted');
+        case 'accepted': return btn('Mulai Muat','mulai_muat');
+        case 'mulai_muat': return btn('Selesai Muat','selesai_muat');
+        case 'selesai_muat': return \`
+          <div class="row">
+            <input placeholder="No Surat Jalan" data-field="sj_muat_no" data-id="\${id}" />
+            <input type="file" data-field="sj_muat_file" data-id="\${id}" />
+            \${btn('Mulai Bongkar','mulai_bongkar')}
+          </div>\`;
+        case 'mulai_bongkar': return btn('Selesai Bongkar','selesai_bongkar');
+        case 'selesai_bongkar': return \`
+          <div class="row">
+            <input placeholder="No Surat Jalan Bongkar" data-field="sj_bongkar_no" data-id="\${id}" />
+            <input type="file" data-field="sj_bongkar_file" data-id="\${id}" />
+          </div>
+          <div class="row">
+            <input placeholder="Nominal Kwitansi" data-field="kw_amount" data-id="\${id}" type="number" step="0.01" />
+            <input type="file" data-field="kw_file" data-id="\${id}" />
+            \${btn('Standby','standby')}
+          </div>\`;
+        case 'standby': return '<span class="badge">Selesai</span>';
+        default: return '';
+      }
+    }
+
+    async function uploadFile(file, path) {
+      const { data, error } = await supabase.storage.from('tms-files').upload(path, file, { upsert: true });
+      if (error) { alert(error.message); return null; }
+      const { data: pub } = supabase.storage.from('tms-files').getPublicUrl(path);
+      return pub.publicUrl;
+    }
+
+    async function updateStatus(id, next) {
+      // sebelum Standby, cek approval jika ada kwitansi
+      if (next==='standby') {
+        const { data: o } = await supabase.from('orders').select('kwitansi_bongkar_amount, approval').eq('id', id).maybeSingle();
+        if (o?.kwitansi_bongkar_amount && o.approval !== 'approved') {
+          return alert('Menunggu approval SPV untuk kwitansi.');
+        }
+      }
+      const { error } = await supabase.from('orders').update({ status: next }).eq('id', id);
+      if (error) alert(error.message);
+    }
+
+    async function handleUploads(row) {
+      const id = row.dataset.id;
+      const sjMuatNo = row.querySelector('input[data-field="sj_muat_no"]')?.value?.trim();
+      const sjMuatFile = row.querySelector('input[data-field="sj_muat_file"]')?.files?.[0];
+      const sjBongkarNo = row.querySelector('input[data-field="sj_bongkar_no"]')?.value?.trim();
+      const sjBongkarFile = row.querySelector('input[data-field="sj_bongkar_file"]')?.files?.[0];
+      const kwAmount = row.querySelector('input[data-field="kw_amount"]')?.value;
+      const kwFile = row.querySelector('input[data-field="kw_file"]')?.files?.[0];
+
+      const payload = {};
+      if (sjMuatNo) payload.surat_jalan_muat_no = sjMuatNo;
+      if (sjBongkarNo) payload.surat_jalan_bongkar_no = sjBongkarNo;
+      if (kwAmount) { payload.kwitansi_bongkar_amount = Number(kwAmount); payload.approval = 'pending'; }
+
+      if (sjMuatFile) {
+        const url = await uploadFile(sjMuatFile, `orders/${id}/sj_muat_${Date.now()}.jpg`);
+        if (url) payload.surat_jalan_muat_url = url;
+      }
+      if (sjBongkarFile) {
+        const url = await uploadFile(sjBongkarFile, `orders/${id}/sj_bongkar_${Date.now()}.jpg`);
+        if (url) payload.surat_jalan_bongkar_url = url;
+      }
+      if (kwFile) {
+        const url = await uploadFile(kwFile, `orders/${id}/kwitansi_${Date.now()}.jpg`);
+        if (url) payload.kwitansi_bongkar_url = url;
+      }
+
+      if (Object.keys(payload).length) {
+        const { error } = await supabase.from('orders').update(payload).eq('id', id);
+        if (error) alert(error.message);
+      }
+    }
+
+    async function loadMyOrders() {
+      if (!myVehicleId) {
+        document.getElementById('orders').innerHTML = '<div class="card">Tidak ada vehicle terhubung ke akun ini.</div>';
+        return;
+      }
+      const { data } = await supabase.from('orders').select('*').eq('vehicle_id', myVehicleId).order('created_at',{ascending:false});
+      const list = document.getElementById('orders');
+      list.innerHTML = '';
+      data?.forEach(o=>{
+        const row = document.createElement('div');
+        row.className = 'card';
+        row.dataset.id = o.id;
+        row.innerHTML = `
+          <div class="row">
+            <div><b>${o.customer_name}</b><br><small>${o.origin} → ${o.destination}</small></div>
+            <div><span class="badge">${o.status}</span></div>
+          </div>
+          <div style="margin-top:8px">${statusButtons(o)}</div>
+        `;
+        list.appendChild(row);
+      });
+    }
+
+    function wire() {
+      document.getElementById('orders').addEventListener('click', async (e)=>{
+        const btn = e.target.closest('button[data-next]'); if (!btn) return;
+        const card = e.target.closest('.card');
+        await handleUploads(card);
+        await updateStatus(btn.dataset.id, btn.dataset.next);
+      });
+    }
+
+    async function init() {
+      await requireUnit();
+      wire();
+      loadMyOrders();
+      supabase.channel('orders').on('postgres_changes', { event:'*', schema:'public', table:'orders' }, loadMyOrders).subscribe();
+    }
+
+    init();
+  </script>
+</head>
+<body>
+  <header>
+    <h2>TMS — Unit <span class="badge" id="who"></span></h2>
+    <button class="btn outline" onclick="supabase.auth.signOut().then(()=>location.href='index.html')">Logout</button>
+  </header>
+  <div class="container">
+    <div id="orders" class="grid"></div>
+  </div>
+  <footer>© TMS Demo</footer>
+</body>
+</html>

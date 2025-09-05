@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TMS Login</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script type="module">
+    import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    async function route() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data, error } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
+      if (error) console.error(error);
+      if (data?.role === 'spv') window.location.href = 'spv.html';
+      else if (data?.role === 'unit') window.location.href = 'unit.html';
+    }
+    route();
+
+    window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = e.target.email.value.trim();
+        const password = e.target.password.value;
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) alert(error.message);
+        else route();
+      });
+    });
+  </script>
+</head>
+<body>
+  <header><h2>TMS Cargonesia — Login</h2></header>
+  <div class="container">
+    <div class="card">
+      <form id="loginForm" class="grid grid-2">
+        <div>
+          <label>Email</label>
+          <input name="email" type="email" required />
+        </div>
+        <div>
+          <label>Password</label>
+          <input name="password" type="password" required />
+        </div>
+        <div class="row">
+          <button class="btn" type="submit">Login</button>
+          <button class="btn outline" type="button" onclick="window.location='register.html'">Register</button>
+        </div>
+      </form>
+    </div>
+    <div class="card">
+      <p><b>Tips:</b> Setelah membuat user, set role di tabel <code>profiles</code> lalu relogin.</p>
+    </div>
+  </div>
+  <footer>© TMS Demo</footer>
+</body>
+</html>

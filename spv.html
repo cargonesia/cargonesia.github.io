@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TMS — SPV</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script type="module">
+    import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    async function requireSpv() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return location.href='index.html';
+      const { data, error } = await supabase.from('profiles').select('role,full_name').eq('id', user.id).maybeSingle();
+      if (error || data?.role !== 'spv') return location.href='index.html';
+      document.getElementById('who').innerText = data.full_name || 'SPV';
+    }
+
+    async function loadKPI() {
+      const { data: orders } = await supabase.from('orders').select('*');
+      const total = orders?.length || 0;
+      const sumPrice = orders?.reduce((a,b)=>a+Number(b.price||0),0) || 0;
+      const sumUJ = orders?.reduce((a,b)=>a+Number(b.uang_jalan||0),0) || 0;
+      const byStatus = s => orders?.filter(o=>o.status===s).length || 0;
+      document.getElementById('kpi_total').innerText = total;
+      document.getElementById('kpi_muat').innerText = byStatus('mulai_muat');
+      document.getElementById('kpi_selesai_muat').innerText = byStatus('selesai_muat');
+      document.getElementById('kpi_price').innerText = sumPrice.toLocaleString();
+      document.getElementById('kpi_uj').innerText = sumUJ.toLocaleString();
+    }
+
+    async function loadVehicles() {
+      const { data } = await supabase.from('vehicles').select('id,nopol,type_unit,driver_name');
+      const tbody = document.querySelector('#veh_tbody');
+      tbody.innerHTML = '';
+      data?.forEach(v=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = \`
+          <td>\${v.nopol}</td>
+          <td>\${v.type_unit}</td>
+          <td>\${v.driver_name||''}</td>\`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadAssignmentForm() {
+      const { data: customers } = await supabase.from('customers').select('id,name,origin,destination,uang_jalan,price');
+      const sel = id => document.getElementById(id);
+      sel('a_customer').innerHTML = customers?.map(c=>\`<option value="\${c.id}" data-origin="\${c.origin}" data-destination="\${c.destination}" data-uj="\${c.uang_jalan}" data-price="\${c.price}">\${c.name}</option>\`).join('') || '<option value="">(kosong)</option>';
+      sel('a_customer').addEventListener('change', e=>{
+        const opt = e.target.selectedOptions[0];
+        if (!opt) return;
+        sel('a_origin').value = opt.dataset.origin||'';
+        sel('a_destination').value = opt.dataset.destination||'';
+        sel('a_uj').value = opt.dataset.uj||0;
+      });
+    }
+
+    async function addAssignment(e) {
+      e.preventDefault();
+      const form = e.target;
+      const customer_id = form.customer.value;
+      const origin = form.origin.value;
+      const destination = form.destination.value;
+      const uang_jalan = Number(form.uang_jalan.value||0);
+      // ambil price dan name dari customer
+      const { data: c } = await supabase.from('customers').select('name,price').eq('id', customer_id).maybeSingle();
+      const price = Number(c?.price||0);
+      const customer_name = c?.name || '';
+
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error } = await supabase.from('orders').insert([{
+        customer_id, customer_name, origin, destination, uang_jalan, price, created_by: user.id, status:'assignment'
+      }]);
+      if (error) alert(error.message);
+      else { alert('Order dimasukkan ke Assignment'); form.reset(); loadAssignmentTable(); loadKPI(); }
+    }
+
+    async function loadAssignmentTable() {
+      const { data } = await supabase.from('orders').select('*').eq('status','assignment').order('created_at',{ascending:false});
+      const tbody = document.getElementById('ass_tbody');
+      tbody.innerHTML = '';
+      data?.forEach(o=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = \`
+          <td>\${new Date(o.created_at).toLocaleString()}</td>
+          <td>\${o.customer_name}</td>
+          <td>\${o.origin} → \${o.destination}</td>
+          <td>\${Number(o.uang_jalan).toLocaleString()}</td>
+          <td>
+            <button class="btn small" data-id="\${o.id}" data-type="assign">Assign</button>
+            <button class="btn small outline" data-id="\${o.id}" data-type="delete">Delete</button>
+          </td>\`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function assignOrder(orderId) {
+      // pilih vehicle berdasarkan type? Di UI sederhana: pilih dari seluruh vehicles.
+      const { data: vehicles } = await supabase.from('vehicles').select('id,nopol,type_unit');
+      const choice = prompt('Pilih NOPOL (ketik persis):\n' + vehicles.map(v=>\`\${v.nopol} (\${v.type_unit})\`).join('\n'));
+      const v = vehicles.find(v=>v.nopol===choice);
+      if (!v) return alert('NOPOL tidak ditemukan');
+      const { error } = await supabase.from('orders').update({ vehicle_id: v.id, assigned_at: new Date().toISOString() }).eq('id', orderId);
+      if (error) alert(error.message);
+      else { alert('Assigned ke '+v.nopol); loadAssignmentTable(); }
+    }
+
+    async function deleteOrder(orderId) {
+      if (!confirm('Hapus order dari Assignment?')) return;
+      const { error } = await supabase.from('orders').delete().eq('id', orderId);
+      if (error) alert(error.message); else loadAssignmentTable();
+    }
+
+    async function loadApproval() {
+      // tampilkan order dengan kwitansi_amount != null dan approval != approved
+      const { data } = await supabase.from('orders').select('*').not('kwitansi_bongkar_amount','is',null).neq('approval','approved').order('created_at',{ascending:false});
+      const tbody = document.getElementById('appr_tbody');
+      tbody.innerHTML='';
+      data?.forEach(o=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = \`
+          <td>\${o.customer_name}</td>
+          <td>\${o.origin} → \${o.destination}</td>
+          <td>\${Number(o.kwitansi_bongkar_amount||0).toLocaleString()}</td>
+          <td><a href="\${o.kwitansi_bongkar_url||'#'}" target="_blank">lihat</a></td>
+          <td>\${o.approval}</td>
+          <td class="row">
+            <button class="btn small" data-action="ok" data-id="\${o.id}">OK</button>
+            <button class="btn small outline" data-action="reject" data-id="\${o.id}">Reject</button>
+          </td>\`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function approvalAction(id, action) {
+      const payload = action==='ok' ? { approval: 'approved', approval_note: null } : { approval: 'rejected' };
+      const { error } = await supabase.from('orders').update(payload).eq('id', id);
+      if (error) alert(error.message); else loadApproval();
+    }
+
+    function wireEvents() {
+      document.querySelector('nav.tabs').addEventListener('click', (e)=>{
+        const tab = e.target.closest('.tab'); if(!tab) return;
+        document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+        tab.classList.add('active');
+        const target = tab.dataset.target;
+        document.querySelectorAll('.view').forEach(v=>v.classList.add('hide'));
+        document.getElementById(target).classList.remove('hide');
+      });
+
+      document.getElementById('ass_tbody').addEventListener('click', (e)=>{
+        const btn = e.target.closest('button'); if(!btn) return;
+        const id = btn.dataset.id;
+        const type = btn.dataset.type;
+        if (type==='assign') assignOrder(id);
+        if (type==='delete') deleteOrder(id);
+      });
+
+      document.getElementById('appr_tbody').addEventListener('click', (e)=>{
+        const btn = e.target.closest('button'); if(!btn) return;
+        approvalAction(btn.dataset.id, btn.dataset.action);
+      });
+
+      document.getElementById('assForm').addEventListener('submit', addAssignment);
+    }
+
+    async function loadVehicleStatus() {
+      const { data } = await supabase
+        .from('orders')
+        .select('id,status,vehicle_id,customers(name),vehicle:vehicle_id(nopol,type_unit)')
+        .in('status',['mulai_muat','selesai_muat','mulai_bongkar','selesai_bongkar','accepted','assignment']);
+
+      const tbody = document.getElementById('vehstat_tbody');
+      tbody.innerHTML='';
+      data?.forEach(o=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = \`
+          <td>\${o.vehicle?.nopol||'-'}</td>
+          <td>\${o.vehicle?.type_unit||'-'}</td>
+          <td class="status">\${o.status}</td>\`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function init() {
+      await requireSpv();
+      wireEvents();
+      loadKPI();
+      loadVehicles();
+      loadAssignmentForm();
+      loadAssignmentTable();
+      loadVehicleStatus();
+      loadApproval();
+
+      // realtime modest
+      supabase.channel('orders')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, payload => {
+          loadKPI(); loadAssignmentTable(); loadVehicleStatus(); loadApproval();
+        }).subscribe();
+    }
+    init();
+  </script>
+</head>
+<body>
+  <header>
+    <h2>TMS — SPV <span class="badge" id="who"></span></h2>
+    <button class="btn outline" onclick="supabase.auth.signOut().then(()=>location.href='index.html')">Logout</button>
+  </header>
+
+  <div class="container">
+    <nav class="tabs">
+      <div class="tab active" data-target="v_dash">Dashboard</div>
+      <div class="tab" data-target="v_vehicle">Vehicle Status</div>
+      <div class="tab" data-target="v_assign">Order Assignment</div>
+      <div class="tab" data-target="v_approval">Approval</div>
+      <div class="tab" data-target="v_history">Order History</div>
+    </nav>
+
+    <section id="v_dash" class="view">
+      <div class="grid grid-4">
+        <div class="card"><div>Total Order</div><div class="kpi" id="kpi_total">0</div></div>
+        <div class="card"><div>Mulai Muat</div><div class="kpi" id="kpi_muat">0</div></div>
+        <div class="card"><div>Selesai Muat</div><div class="kpi" id="kpi_selesai_muat">0</div></div>
+        <div class="card"><div>Total Price</div><div class="kpi" id="kpi_price">0</div></div>
+        <div class="card"><div>Total Uang Jalan</div><div class="kpi" id="kpi_uj">0</div></div>
+      </div>
+    </section>
+
+    <section id="v_vehicle" class="view hide">
+      <div class="card">
+        <table class="table">
+          <thead><tr><th>Nopol</th><th>Type Unit</th><th>Driver</th></tr></thead>
+          <tbody id="veh_tbody"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Status Order per Kendaraan</h3>
+        <table class="table">
+          <thead><tr><th>Nopol</th><th>Type</th><th>Status</th></tr></thead>
+          <tbody id="vehstat_tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="v_assign" class="view hide">
+      <div class="card">
+        <h3>Tambah ke Assignment</h3>
+        <form id="assForm" class="grid grid-4">
+          <div>
+            <label>Customer Name</label>
+            <select id="a_customer" name="customer" required></select>
+          </div>
+          <div>
+            <label>Origin</label>
+            <input id="a_origin" name="origin" required />
+          </div>
+          <div>
+            <label>Destination</label>
+            <input id="a_destination" name="destination" required />
+          </div>
+          <div>
+            <label>Uang Jalan</label>
+            <input id="a_uj" name="uang_jalan" type="number" step="0.01" required />
+          </div>
+          <div class="row">
+            <button class="btn" type="submit">Add</button>
+          </div>
+        </form>
+      </div>
+      <div class="card">
+        <h3>Order Assignment</h3>
+        <table class="table">
+          <thead><tr><th>Tanggal</th><th>Customer</th><th>Route</th><th>Uang Jalan</th><th>Aksi</th></tr></thead>
+          <tbody id="ass_tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="v_approval" class="view hide">
+      <div class="card">
+        <h3>Approval Kwitansi Bongkar</h3>
+        <table class="table">
+          <thead><tr><th>Customer</th><th>Route</th><th>Nominal</th><th>Kwitansi</th><th>Status</th><th>Aksi</th></tr></thead>
+          <tbody id="appr_tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="v_history" class="view hide">
+      <div class="card">
+        <h3>Order History</h3>
+        <table class="table">
+          <thead><tr><th>Tanggal</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Price</th><th>Uang Jalan</th></tr></thead>
+          <tbody id="hist_tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script type="module">
+    import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    async function loadHistory(){
+      const { data } = await supabase.from('orders').select('*, vehicle:vehicle_id(nopol)').order('created_at',{ascending:false}).limit(200);
+      const tbody = document.getElementById('hist_tbody');
+      tbody.innerHTML='';
+      data?.forEach(o=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = \`
+          <td>\${new Date(o.created_at).toLocaleString()}</td>
+          <td>\${o.customer_name||''}</td>
+          <td>\${o.vehicle?.nopol||'-'}</td>
+          <td>\${o.status}</td>
+          <td>\${Number(o.price||0).toLocaleString()}</td>
+          <td>\${Number(o.uang_jalan||0).toLocaleString()}</td>\`;
+        tbody.appendChild(tr);
+      });
+    }
+    loadHistory();
+  </script>
+  <footer>© TMS Demo</footer>
+</body>
+</html>

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script type="module">
+    import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('regForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const full_name = e.target.full_name.value.trim();
+        const email = e.target.email.value.trim();
+        const password = e.target.password.value;
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) return alert(error.message);
+        // create profile
+        const { data: user } = await supabase.auth.getUser();
+        if (user?.user) {
+          await supabase.from('profiles').upsert({ id: user.user.id, full_name });
+        }
+        alert('Register sukses. Silakan login.');
+        window.location.href = 'index.html';
+      });
+    });
+  </script>
+</head>
+<body>
+  <header><h2>Register</h2></header>
+  <div class="container">
+    <div class="card">
+      <form id="regForm" class="grid grid-2">
+        <div>
+          <label>Nama Lengkap</label>
+          <input name="full_name" required />
+        </div>
+        <div>
+          <label>Email</label>
+          <input name="email" type="email" required />
+        </div>
+        <div>
+          <label>Password</label>
+          <input name="password" type="password" required />
+        </div>
+        <div class="row">
+          <button class="btn" type="submit">Buat Akun</button>
+          <button class="btn outline" type="button" onclick="window.location='index.html'">Kembali</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

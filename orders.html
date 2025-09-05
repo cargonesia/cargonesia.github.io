@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cargonesia Orders</title>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background:#f0f4f8; }
+    .navbar { display:flex; justify-content:space-between; align-items:center; background:#1e293b; color:white; padding:10px 20px;}
+    .nav-links { list-style:none; display:flex; gap:20px; margin:0; }
+    .nav-links a { color:white; text-decoration:none; }
+    .dropdown-content { display:none; position:absolute; background:#334155; list-style:none; padding:10px; margin:0; }
+    .dropdown:hover .dropdown-content { display:block; }
+    section { padding:20px; }
+    table { width:100%; border-collapse: collapse; margin-top:10px;}
+    th, td { border:1px solid #999; padding:8px; text-align:center; }
+    button { padding:5px 10px; margin:2px; }
+    #assign-modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5);}
+    #assign-content { background:white; padding:20px; margin:50px auto; width:300px; border-radius:5px; }
+  </style>
+</head>
+<body>
+
+  <nav class="navbar">
+    <div class="nav-brand">Cargonesia</div>
+    <ul class="nav-links">
+      <li><a href="index.html">Dashboard</a></li>
+      <li><a href="#">Orders</a></li>
+    </ul>
+    <button id="logout-btn">Logout</button>
+  </nav>
+
+  <section>
+    <h2>Assign New Order</h2>
+    <form id="order-form">
+      <label>Customer:</label><br>
+      <select id="customer" required><option value="">Pilih Customer</option></select><br>
+
+      <label>Origin:</label><br>
+      <select id="origin" required><option value="">Pilih Origin</option></select><br>
+
+      <label>Destination:</label><br>
+      <select id="destination" required><option value="">Pilih Destination</option></select><br>
+
+      <label>Type Unit:</label><br>
+      <select id="type-unit" required><option value="">Pilih Type Unit</option></select><br>
+
+      <label>Order Date:</label><br>
+      <input type="date" id="order-date" required><br><br>
+
+      <button type="submit">Add Order</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Orders Table</h2>
+    <table id="orders-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Customer</th>
+          <th>Origin</th>
+          <th>Destination</th>
+          <th>Date</th>
+          <th>Type Unit</th>
+          <th>Assigned Unit</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- Assign Modal -->
+  <div id="assign-modal">
+    <div id="assign-content">
+      <h3>Assign Unit</h3>
+      <select id="unit-select"><option value="">Pilih Unit</option></select><br><br>
+      <button id="done-assign">Done</button>
+      <button id="cancel-assign">Cancel</button>
+    </div>
+  </div>
+
+  <script>
+    const SUPABASE_URL = "https://hbhebwlnausycviijkjl.supabase.co";
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhiaGVid2xuYXVzeWN2aWlqa2psIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcwODg3MjAsImV4cCI6MjA3MjY2NDcyMH0.-7HR6jL-dxFIHOGiZYi4XRymq4aIvQc2FQxYSYdt_4k";
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    const customerSelect = document.getElementById('customer');
+    const originSelect = document.getElementById('origin');
+    const destinationSelect = document.getElementById('destination');
+    const typeUnitSelect = document.getElementById('type-unit');
+    const orderForm = document.getElementById('order-form');
+    const ordersTable = document.getElementById('orders-table').querySelector('tbody');
+
+    const assignModal = document.getElementById('assign-modal');
+    const unitSelect = document.getElementById('unit-select');
+    let currentAssignOrderId = null;
+    let currentAssignType = '';
+
+    // Load customers
+    async function loadCustomers() {
+      const { data: customers } = await supabase.from('customers').select('*');
+      customers.forEach(c => {
+        const option = document.createElement('option');
+        option.value = c.id;
+        option.textContent = c.customer_name;
+        customerSelect.appendChild(option);
+
+        // Also fill origin/destination/type-unit based on first customer
+        if(!originSelect.querySelector(`option[value="${c.origin}"]`)){
+          const o = document.createElement('option'); o.value=c.origin;o.textContent=c.origin; originSelect.appendChild(o);
+        }
+        if(!destinationSelect.querySelector(`option[value="${c.destination}"]`)){
+          const d = document.createElement('option'); d.value=c.destination; d.textContent=c.destination; destinationSelect.appendChild(d);
+        }
+        if(!typeUnitSelect.querySelector(`option[value="${c.type_unit}"]`)){
+          const t = document.createElement('option'); t.value=c.type_unit; t.textContent=c.type_unit; typeUnitSelect.appendChild(t);
+        }
+      });
+    }
+
+    // Load orders
+    async function loadOrders() {
+      const { data: orders } = await supabase.from('orders').select('*');
+      renderOrders(orders);
+    }
+
+    function renderOrders(orders){
+      ordersTable.innerHTML='';
+      orders.forEach(o=>{
+        const row = ordersTable.insertRow();
+        row.innerHTML=`
+          <td>${o.id}</td>
+          <td>${o.customer}</td>
+          <td>${o.origin}</td>
+          <td>${o.destination}</td>
+          <td>${o.order_date}</td>
+          <td>${o.type_unit}</td>
+          <td>${o.assigned_unit || '-'}</td>
+          <td>${o.status || 'pending'}</td>
+          <td>
+            <button class="assign-btn" data-id="${o.id}" data-type="${o.type_unit}">Assign</button>
+            <button class="delete-btn" data-id="${o.id}">Delete</button>
+          </td>
+        `;
+      });
+      attachButtons();
+    }
+
+    function attachButtons(){
+      document.querySelectorAll('.assign-btn').forEach(btn=>{
+        btn.addEventListener('click',()=>openAssignForm(btn.dataset.id, btn.dataset.type));
+      });
+      document.querySelectorAll('.delete-btn').forEach(btn=>{
+        btn.addEventListener('click',()=>deleteOrder(btn.dataset.id));
+      });
+    }
+
+    // Add Order
+    orderForm.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const customerId = customerSelect.value;
+      const origin = originSelect.value;
+      const destination = destinationSelect.value;
+      const typeUnit = typeUnitSelect.value;
+      const orderDate = document.getElementById('order-date').value;
+
+      const { data: customerData } = await supabase.from('customers').select('*').eq('id', customerId).single();
+      const { data, error } = await supabase.from('orders').insert([{
+        customer: customerData.customer_name,
+        origin,
+        destination,
+        type_unit: typeUnit,
+        order_date: orderDate,
+        status:'pending'
+      }]);
+      if(error){ alert("Gagal add order:"+error.message); return;}
+      loadOrders();
+    });
+
+    // Delete Order
+    async function deleteOrder(id){
+      if(confirm("Hapus order ini?")){
+        await supabase.from('orders').delete().eq('id', id);
+      }
+    }
+
+    // Assign Order
+    async function openAssignForm(orderId, typeUnit){
+      currentAssignOrderId = orderId;
+      currentAssignType = typeUnit;
+      // load units sesuai type
+      unitSelect.innerHTML='<option value="">Pilih Unit</option>';
+      const { data: units } = await supabase.from('units').select('*').eq('type', typeUnit);
+      units.forEach(u=>{
+        const option = document.createElement('option');
+        option.value = u.id;
+        option.textContent = u.police_no;
+        unitSelect.appendChild(option);
+      });
+      assignModal.style.display='block';
+    }
+
+    document.getElementById('done-assign').addEventListener('click', async ()=>{
+      const unitId = unitSelect.value;
+      if(!unitId){ alert("Pilih unit"); return;}
+      const { data: unit } = await supabase.from('units').select('*').eq('id', unitId).single();
+      await supabase.from('orders').update({assigned_unit:unit.police_no, status:'assigned'}).eq('id', currentAssignOrderId);
+      assignModal.style.display='none';
+      loadOrders();
+    });
+
+    document.getElementById('cancel-assign').addEventListener('click', ()=>{
+      assignModal.style.display='none';
+    });
+
+    // Realtime subscription
+    supabase.channel('public:orders')
+      .on('postgres_changes', { event:'*', schema:'public', table:'orders' }, payload=>{
+        loadOrders();
+      })
+      .subscribe();
+
+    loadCustomers();
+    loadOrders();
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Users CRUD - Supabase</title>
+  <style>
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #f2f2f2; }
+    form { margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Users CRUD (Supabase)</h1>
+
+  <!-- Form Tambah / Edit -->
+  <form id="userForm">
+    <input type="hidden" id="userId" />
+    <input type="text" id="username" placeholder="Username" required />
+    <input type="email" id="email" placeholder="Email" required />
+    <select id="role" required>
+      <option value="">-- Pilih Role --</option>
+      <option value="unit">Unit</option>
+      <option value="supervisor">Supervisor</option>
+      <option value="manager">Manager</option>
+    </select>
+    <button type="submit">Simpan</button>
+    <button type="button" id="cancelEdit" style="display:none;">Batal Edit</button>
+  </form>
+
+  <!-- Tabel Users -->
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Username</th>
+        <th>Email</th>
+        <th>Role</th>
+        <th>Aksi</th>
+      </tr>
+    </thead>
+    <tbody id="userTable"></tbody>
+  </table>
+
+  <script type="module">
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js'
+
+    // 🔹 Ganti dengan URL & Anon Key project kamu
+    const SUPABASE_URL = 'https://hbhebwlnausycviijkjl.supabase.co'
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhiaGVid2xuYXVzeWN2aWlqa2psIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcwODg3MjAsImV4cCI6MjA3MjY2NDcyMH0.-7HR6jL-dxFIHOGiZYi4XRymq4aIvQc2FQxYSYdt_4k'
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+    const userForm = document.getElementById('userForm')
+    const userTable = document.getElementById('userTable')
+    const cancelEditBtn = document.getElementById('cancelEdit')
+
+    // CREATE & UPDATE
+    userForm.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const id = document.getElementById('userId').value
+      const username = document.getElementById('username').value
+      const email = document.getElementById('email').value
+      const role = document.getElementById('role').value
+
+      if (id) {
+        // UPDATE
+        const { error } = await supabase.from('users').update({ username, email, role }).eq('id', id)
+        if (error) alert('Gagal update: ' + error.message)
+        else alert('User berhasil diupdate!')
+      } else {
+        // CREATE
+        const { error } = await supabase.from('users').insert([{ username, email, role }])
+        if (error) alert('Gagal tambah: ' + error.message)
+        else alert('User berhasil ditambahkan!')
+      }
+
+      userForm.reset()
+      document.getElementById('userId').value = ''
+      cancelEditBtn.style.display = 'none'
+      loadUsers()
+    })
+
+    // READ
+    async function loadUsers() {
+      const { data: users, error } = await supabase.from('users').select('*').order('id', { ascending: true })
+      if (error) {
+        console.error(error)
+        return
+      }
+      userTable.innerHTML = ''
+      users.forEach(u => {
+        const row = document.createElement('tr')
+        row.innerHTML = `
+          <td>${u.id}</td>
+          <td>${u.username}</td>
+          <td>${u.email}</td>
+          <td>${u.role}</td>
+          <td>
+            <button onclick="editUser(${u.id}, '${u.username}', '${u.email}', '${u.role}')">Edit</button>
+            <button onclick="deleteUser(${u.id})">Hapus</button>
+          </td>
+        `
+        userTable.appendChild(row)
+      })
+    }
+
+    // DELETE
+    window.deleteUser = async function(id) {
+      if (!confirm('Yakin mau hapus user ini?')) return
+      const { error } = await supabase.from('users').delete().eq('id', id)
+      if (error) alert('Gagal hapus: ' + error.message)
+      else {
+        alert('User berhasil dihapus!')
+        loadUsers()
+      }
+    }
+
+    // EDIT
+    window.editUser = function(id, username, email, role) {
+      document.getElementById('userId').value = id
+      document.getElementById('username').value = username
+      document.getElementById('email').value = email
+      document.getElementById('role').value = role
+      cancelEditBtn.style.display = 'inline'
+    }
+
+    // CANCEL EDIT
+    cancelEditBtn.addEventListener('click', () => {
+      userForm.reset()
+      document.getElementById('userId').value = ''
+      cancelEditBtn.style.display = 'none'
+    })
+
+    // Load awal
+    loadUsers()
+  </script>
+</body>
+</html>
